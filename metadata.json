@@ -1,0 +1,6 @@
+{
+  "name": "HUB3 & SEPA Nalozi za Plaćanje",
+  "description": "Izrada, uređivanje, serijski uvoz/izvoz i skeniranje HUB-3 PDF417 i SEPA EPC QR platnih naloga s podrškom za izvanmrežni (offline) rad.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
