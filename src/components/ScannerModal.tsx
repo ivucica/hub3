@@ -11,7 +11,7 @@ import {
   RefreshCw,
   Zap,
 } from 'lucide-react';
-import { parseScannedHub3, parseScannedSepaQr } from '../utils/paymentUtils';
+import { parseScannedHub3, parseScannedSepaQr, fixMojibakeUtf8 } from '../utils/paymentUtils';
 import { PaymentDocument } from '../types/payment';
 
 interface ScannerModalProps {
@@ -43,7 +43,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const controlsRef = useRef<IScannerControls | null>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
 
-  // Initialize hints
+  // Initialize hints with explicit UTF-8 encoding
   useEffect(() => {
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [
@@ -51,6 +51,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       BarcodeFormat.QR_CODE,
       BarcodeFormat.CODE_128,
     ]);
+    hints.set(DecodeHintType.CHARACTER_SET, 'UTF-8');
     hints.set(DecodeHintType.TRY_HARDER, true);
     codeReaderRef.current = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 250 });
 
@@ -119,7 +120,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         videoRef.current,
         (result, error) => {
           if (result) {
-            handleDetectedCode(result.getText(), result.getBarcodeFormat().toString());
+            const text = extractResultText(result);
+            handleDetectedCode(text, result.getBarcodeFormat().toString());
           }
         }
       );
@@ -131,6 +133,21 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     }
   };
 
+  const extractResultText = (result: any): string => {
+    try {
+      const rawBytes = typeof result.getRawBytes === 'function' ? result.getRawBytes() : null;
+      if (rawBytes && rawBytes.length > 0) {
+        const decoded = new TextDecoder('utf-8', { fatal: false }).decode(rawBytes);
+        if (decoded && !decoded.includes('\uFFFD')) {
+          return fixMojibakeUtf8(decoded);
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return fixMojibakeUtf8(result.getText());
+  };
+
   const stopCamera = () => {
     if (controlsRef.current) {
       controlsRef.current.stop();
@@ -139,7 +156,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     setIsScanning(false);
   };
 
-  const handleDetectedCode = (text: string, formatName = 'Nepoznato') => {
+  const handleDetectedCode = (rawText: string, formatName = 'Nepoznato') => {
+    const text = fixMojibakeUtf8(rawText);
     let parsed: Partial<PaymentDocument> | null = null;
 
     if (text.startsWith('HRVHUB30')) {
@@ -163,8 +181,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  // TODO: Future support for parsing multiple pages/codes from PDF documents
+  const processImageFile = async (file: File | Blob, sourceDesc = 'Učitana slika') => {
     if (!file || !codeReaderRef.current) return;
 
     setErrorMessage(null);
@@ -178,9 +196,10 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         try {
           const result = await codeReaderRef.current!.decodeFromImageElement(img);
           if (result) {
-            handleDetectedCode(result.getText(), result.getBarcodeFormat().toString());
+            const text = extractResultText(result);
+            handleDetectedCode(text, `${result.getBarcodeFormat().toString()} (${sourceDesc})`);
           } else {
-            setErrorMessage('Barkod nije prepoznat na učitanoj slici. Provjerite oštrinu i osvjetljenje.');
+            setErrorMessage('Barkod nije prepoznat na slici. Provjerite oštrinu i kontrast koda.');
           }
         } catch (scanErr) {
           setErrorMessage('Barkod (PDF417 ili QR kod) nije pronađen na slici.');
@@ -188,9 +207,45 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           URL.revokeObjectURL(imageUrl);
         }
       };
+      img.onerror = () => {
+        setErrorMessage('Greška pri učitavanju slike.');
+        URL.revokeObjectURL(imageUrl);
+      };
     } catch (err) {
-      setErrorMessage('Greška pri učitavanju datoteke.');
+      setErrorMessage('Greška pri obradi slike.');
       URL.revokeObjectURL(imageUrl);
+    }
+  };
+
+  // Support pasting image from clipboard (e.g. Cmd+V / Ctrl+V screenshot of a PDF/screen)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          const blob = items[i].getAsFile();
+          if (blob) {
+            setActiveTab('file');
+            processImageFile(blob, 'Snimka zaslona / Clipboard');
+            e.preventDefault();
+            break;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [isOpen]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processImageFile(file, 'Datoteka');
     }
   };
 
@@ -345,17 +400,20 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
           {activeTab === 'file' && (
             <div className="space-y-4">
-              <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-8 hover:border-red-500 hover:bg-red-50/30 transition cursor-pointer group">
+              <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-8 hover:border-red-500 hover:bg-red-50/30 transition cursor-pointer group text-center">
                 <Upload className="w-10 h-10 text-slate-400 group-hover:text-red-500 transition mb-3" />
                 <span className="text-sm font-semibold text-slate-700">
                   Kliknite za prijenos slike uplatnice ili koda
                 </span>
-                <span className="text-xs text-slate-400 mt-1">
-                  Podržani formati: PNG, JPG, WEBP, PDF screenshot
+                <span className="text-xs text-red-600 font-medium mt-1">
+                  ili pritisnite <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded font-mono text-[10px]">Ctrl+V</kbd> / <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded font-mono text-[10px]">Cmd+V</kbd> za lijepljenje snimke zaslona (screenshot)
+                </span>
+                <span className="text-[11px] text-slate-400 mt-2">
+                  Podržani slikovni formati: PNG, JPG, WEBP
                 </span>
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/png,image/jpeg,image/webp,image/bmp"
                   onChange={handleFileUpload}
                   className="hidden"
                 />

@@ -210,9 +210,77 @@ export function buildSepaQrPayload(
 }
 
 /**
+ * Corrects Latin-1 / Windows-1252 / CP437 mojibake where UTF-8 encoded Croatian diacritics
+ * (Č, č, Ć, ć, Đ, đ, Š, š, Ž, ž) were misinterpreted during PDF417 or QR decoding.
+ * e.g. "RAÄŒUN" -> "RAČUN", "FOLNEGOVIÄ†A" -> "FOLNEGOVIĆA"
+ */
+export function fixMojibakeUtf8(str: string): string {
+  if (!str) return '';
+
+  // 1. Direct targeted replacement for Croatian diacritics in Latin-1 / Win-1252
+  let text = str
+    .replace(/ÄŒ/g, 'Č')
+    .replace(/Ä\u008c/g, 'Č')
+    .replace(/Ä\u008d/g, 'č')
+    .replace(/Ä†/g, 'Ć')
+    .replace(/Ä\u0086/g, 'Ć')
+    .replace(/Ä‡/g, 'ć')
+    .replace(/Ä\u0087/g, 'ć')
+    .replace(/Ä\u0090/g, 'Đ')
+    .replace(/Ä‘/g, 'đ')
+    .replace(/Ä\u0091/g, 'đ')
+    .replace(/Å\u00a0/g, 'Š')
+    .replace(/Å /g, 'Š')
+    .replace(/Å¡/g, 'š')
+    .replace(/Å\u00a1/g, 'š')
+    .replace(/Å½/g, 'Ž')
+    .replace(/Å\u00bd/g, 'Ž')
+    .replace(/Å¾/g, 'ž')
+    .replace(/Å\u00be/g, 'ž');
+
+  // 2. Binary byte re-interpretation if other characters still contain mojibake sequences
+  if (/Ä|Å|Ã/.test(text)) {
+    try {
+      const win1252Map: Record<number, number> = {
+        0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85,
+        0x2020: 0x86, 0x2021: 0x87, 0x02c6: 0x88, 0x2030: 0x89, 0x0160: 0x8a,
+        0x2039: 0x8b, 0x0152: 0x8c, 0x017d: 0x8e, 0x2018: 0x91, 0x2019: 0x92,
+        0x201c: 0x93, 0x201d: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+        0x02dc: 0x98, 0x2122: 0x99, 0x0161: 0x9a, 0x203a: 0x9b, 0x0153: 0x9c,
+        0x017e: 0x9e, 0x0178: 0x9f,
+      };
+
+      const bytes: number[] = [];
+      let valid = true;
+      for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i);
+        if (code <= 0xff) {
+          bytes.push(code);
+        } else if (win1252Map[code] !== undefined) {
+          bytes.push(win1252Map[code]);
+        } else {
+          valid = false;
+          break;
+        }
+      }
+
+      if (valid && bytes.length > 0) {
+        const decoded = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
+        return decoded;
+      }
+    } catch {
+      // Fallback: keep string with replacements applied
+    }
+  }
+
+  return text;
+}
+
+/**
  * Parses raw text from a scanned HUB-3 PDF417 barcode.
  */
-export function parseScannedHub3(payload: string): Partial<PaymentDocument> | null {
+export function parseScannedHub3(rawPayload: string): Partial<PaymentDocument> | null {
+  const payload = fixMojibakeUtf8(rawPayload);
   const lines = payload.split(/\r?\n/);
   if (!lines || lines.length < 10) return null;
   if (!lines[0].startsWith('HRVHUB30')) return null;
@@ -220,14 +288,18 @@ export function parseScannedHub3(payload: string): Partial<PaymentDocument> | nu
   const cents = parseInt(lines[2]?.trim() || '0', 10);
   const amount = isNaN(cents) ? 0 : cents / 100;
 
-  const payerLines = [lines[3], lines[4], lines[5]].filter(Boolean).map(s => s.trim());
-  const recipientLines = [lines[6], lines[7], lines[8]].filter(Boolean).map(s => s.trim());
+  const payerLines = [lines[3], lines[4], lines[5]]
+    .filter(Boolean)
+    .map(s => fixMojibakeUtf8(s.trim()));
+  const recipientLines = [lines[6], lines[7], lines[8]]
+    .filter(Boolean)
+    .map(s => fixMojibakeUtf8(s.trim()));
 
   const iban = (lines[9] || '').trim();
   const model = (lines[10] || '').trim();
   const pnb = (lines[11] || '').trim();
   const purposeCode = (lines[12] || '').trim();
-  const description = (lines[13] || '').trim();
+  const description = fixMojibakeUtf8((lines[13] || '').trim());
 
   return {
     amount,
@@ -238,7 +310,7 @@ export function parseScannedHub3(payload: string): Partial<PaymentDocument> | nu
     pnb,
     purposeCode,
     description,
-    status: 'novo',
+    status: 'cekanje',
     updatedAt: new Date().toISOString(),
   };
 }
@@ -246,19 +318,20 @@ export function parseScannedHub3(payload: string): Partial<PaymentDocument> | nu
 /**
  * Parses raw text from a scanned SEPA EPC QR code.
  */
-export function parseScannedSepaQr(payload: string): Partial<PaymentDocument> | null {
+export function parseScannedSepaQr(rawPayload: string): Partial<PaymentDocument> | null {
+  const payload = fixMojibakeUtf8(rawPayload);
   const lines = payload.split(/\r?\n/);
   if (!lines || lines.length < 7) return null;
   if (!lines[0].startsWith('BCD') || lines[3] !== 'SCT') return null;
 
-  const recipName = (lines[5] || '').trim();
+  const recipName = fixMojibakeUtf8((lines[5] || '').trim());
   const iban = (lines[6] || '').trim();
   const amtStr = (lines[7] || '').replace('EUR', '').trim();
   const amount = cleanAmount(amtStr);
   const purposeCode = (lines[8] || '').trim();
   const refStructured = (lines[9] || '').trim();
-  const refUnstructured = (lines[10] || '').trim();
-  const payer = (lines[11] || '').trim();
+  const refUnstructured = fixMojibakeUtf8((lines[10] || '').trim());
+  const payer = fixMojibakeUtf8((lines[11] || '').trim());
 
   const { model, pnb } = parseModelAndPnb(refStructured);
 
@@ -271,7 +344,91 @@ export function parseScannedSepaQr(payload: string): Partial<PaymentDocument> | 
     pnb: pnb || refStructured,
     description: refUnstructured || refStructured,
     payer,
-    status: 'novo',
+    status: 'cekanje',
     updatedAt: new Date().toISOString(),
   };
 }
+
+/**
+ * Parses common Croatian date formats (DD/MM/YY, DD/MM/YYYY, DD.MM.YYYY., YYYY-MM-DD).
+ */
+export function parseDateString(dateStr: string | undefined): Date | null {
+  if (!dateStr || !dateStr.trim()) return null;
+  const s = dateStr.trim().replace(/\.$/, '');
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const slashParts = s.split('/');
+  if (slashParts.length === 3) {
+    const day = parseInt(slashParts[0], 10);
+    const month = parseInt(slashParts[1], 10) - 1;
+    let year = parseInt(slashParts[2], 10);
+    if (year < 100) year += 2000;
+    const d = new Date(year, month, day);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const dotParts = s.split('.');
+  if (dotParts.length >= 3) {
+    const day = parseInt(dotParts[0], 10);
+    const month = parseInt(dotParts[1], 10) - 1;
+    let year = parseInt(dotParts[2], 10);
+    if (year < 100) year += 2000;
+    const d = new Date(year, month, day);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  return null;
+}
+
+/**
+ * Derives payment status based on business rules:
+ * - placeno = datum uplate (paymentDate) je unesen
+ * - kasnjenje = datum dospijeća je prošao
+ * - naplata = preostalo manje od 14 dana do dospijeća
+ * - cekanje = više od 14 dana do dospijeća
+ */
+export function computeDerivedStatus(
+  dueDateStr: string | undefined,
+  paymentDateStr: string | undefined,
+  currentDate = new Date()
+): { status: PaymentDocument['status']; reason: string; diffDays?: number } {
+  if (paymentDateStr && paymentDateStr.trim()) {
+    return { status: 'placeno', reason: `Plaćeno (${paymentDateStr.trim()})` };
+  }
+
+  const dueDate = parseDateString(dueDateStr);
+  if (!dueDate) {
+    return { status: 'cekanje', reason: 'Bez datuma dospijeća' };
+  }
+
+  const today = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
+  const due = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+
+  const diffTime = due.getTime() - today.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0) {
+    return {
+      status: 'kasnjenje',
+      reason: `Kasni ${Math.abs(diffDays)} d.`,
+      diffDays,
+    };
+  } else if (diffDays <= 14) {
+    return {
+      status: 'naplata',
+      reason: `Dospijeva za ${diffDays} d.`,
+      diffDays,
+    };
+  } else {
+    return {
+      status: 'cekanje',
+      reason: `Čekanje (${diffDays} d. do roka)`,
+      diffDays,
+    };
+  }
+}
+

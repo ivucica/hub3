@@ -19,6 +19,8 @@ import { ScannerModal } from './components/ScannerModal';
 import { SepaQrModal } from './components/SepaQrModal';
 import { CsvBatchModal } from './components/CsvBatchModal';
 import { InfoModal } from './components/InfoModal';
+import { DocumentHeaderCard } from './components/DocumentHeaderCard';
+import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import {
   FileText,
@@ -32,6 +34,7 @@ import {
   Sparkles,
   Info,
   Check,
+  Undo2,
 } from 'lucide-react';
 import { formatEuro } from './utils/paymentUtils';
 
@@ -57,6 +60,8 @@ export default function App() {
   const [infoModalOpen, setInfoModalOpen] = useState(false);
   const [infoModalType, setInfoModalType] = useState<'purpose' | 'model'>('purpose');
   const [infoModalSelectedCode, setInfoModalSelectedCode] = useState<string | undefined>(undefined);
+  const [deletingDoc, setDeletingDoc] = useState<PaymentDocument | null>(null);
+  const [recentlyDeleted, setRecentlyDeleted] = useState<{ doc: PaymentDocument; index: number } | null>(null);
 
   // Toast feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -110,19 +115,21 @@ export default function App() {
   const handleAddDoc = () => {
     const newDoc: PaymentDocument = {
       id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      folder: activeDoc.folder || 'Opće',
-      filename: `Novi_racun_${documents.length + 1}.pdf`,
-      ourDescription: `Novi nalog #${documents.length + 1}`,
+      folder: 'Opće',
+      filename: '',
+      ourDescription: 'Novi platni nalog',
       dueDate: '',
       amount: 0,
-      status: 'novo',
+      status: 'cekanje',
+      paymentDate: '',
       model: 'HR01',
       pnb: '',
       iban: '',
       recipient: '',
-      payer: activeDoc.payer || '', // Pre-fill payer if available
+      payer: '', // Completely cleared!
       description: '',
-      purposeCode: 'COST',
+      purposeCode: '', // Default to blank!
+      isUrgent: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -130,7 +137,7 @@ export default function App() {
     setDocuments((prev) => [newDoc, ...prev]);
     setActiveDocId(newDoc.id);
     setMobileTab('slip');
-    showToast('Dodan je novi prazan nalog');
+    showToast('Dodan je novi prazan nalog (svi podaci očišćeni).');
   };
 
   const handleDuplicateDoc = (id: string) => {
@@ -141,7 +148,7 @@ export default function App() {
       ...target,
       id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       ourDescription: `${target.ourDescription} (Kopija)`,
-      status: 'novo',
+      status: 'cekanje',
       paymentDate: undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -152,17 +159,42 @@ export default function App() {
     showToast('Nalog je uspješno dupliciran');
   };
 
-  const handleDeleteDoc = (id: string) => {
+  const handleRequestDelete = (id: string) => {
+    const target = documents.find((d) => d.id === id);
+    if (!target) return;
     if (documents.length <= 1) {
       showToast('Sesija mora sadržavati barem jedan nalog.');
       return;
     }
-    const filtered = documents.filter((d) => d.id !== id);
+    setDeletingDoc(target);
+  };
+
+  const handleConfirmDelete = (targetDoc: PaymentDocument) => {
+    const index = documents.findIndex((d) => d.id === targetDoc.id);
+    const filtered = documents.filter((d) => d.id !== targetDoc.id);
     setDocuments(filtered);
-    if (activeDocId === id) {
+    if (activeDocId === targetDoc.id) {
       setActiveDocId(filtered[0].id);
     }
-    showToast('Nalog je uklonjen iz sesije.');
+
+    setRecentlyDeleted({ doc: targetDoc, index: index >= 0 ? index : 0 });
+    setDeletingDoc(null);
+
+    // Auto-dismiss undo after 8 seconds
+    setTimeout(() => {
+      setRecentlyDeleted((curr) => (curr?.doc.id === targetDoc.id ? null : curr));
+    }, 8000);
+  };
+
+  const handleUndoDelete = () => {
+    if (!recentlyDeleted) return;
+    const { doc, index } = recentlyDeleted;
+    const restored = [...documents];
+    restored.splice(index, 0, doc);
+    setDocuments(restored);
+    setActiveDocId(doc.id);
+    setRecentlyDeleted(null);
+    showToast(`Vraćen je obrisani nalog: ${doc.ourDescription || 'Platni nalog'}`);
   };
 
   const handleLoadFictionalSamples = () => {
@@ -295,6 +327,7 @@ export default function App() {
         <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
           
           {/* Left Column: Documents list pane */}
+          {/* Left Column: Documents list pane */}
           <div
             className={`md:col-span-4 lg:col-span-4 h-[calc(100vh-140px)] sticky top-20 document-list-pane ${
               mobileTab === 'list' ? 'block' : 'hidden md:block'
@@ -306,7 +339,7 @@ export default function App() {
               onSelectDoc={handleSelectDoc}
               onAddDoc={handleAddDoc}
               onDuplicateDoc={handleDuplicateDoc}
-              onDeleteDoc={handleDeleteDoc}
+              onDeleteDoc={handleRequestDelete}
               onLoadSamples={handleLoadFictionalSamples}
               onResetToBlank={handleResetToBlank}
             />
@@ -318,60 +351,12 @@ export default function App() {
               mobileTab === 'slip' ? 'block' : 'hidden md:block'
             }`}
           >
-            {/* Active Document Top Details Strip */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3 no-print">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-700 px-2 py-0.5 rounded-full border border-red-200">
-                    {activeDoc.folder || 'Opće'}
-                  </span>
-                  <span className="text-xs font-semibold text-slate-400">
-                    {activeDoc.filename || 'Uplatnica'}
-                  </span>
-                </div>
-                <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                  {activeDoc.ourDescription || 'Platni nalog'}
-                </h2>
-              </div>
-
-              {/* Status Switcher & Info */}
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1.5 text-xs">
-                  <span className="font-semibold text-slate-500">Status:</span>
-                  <select
-                    value={activeDoc.status}
-                    onChange={(e) =>
-                      handleUpdateActiveDoc({
-                        ...activeDoc,
-                        status: e.target.value as PaymentDocument['status'],
-                      })
-                    }
-                    className={`font-semibold text-xs rounded-xl px-2.5 py-1 border focus:outline-none transition cursor-pointer ${
-                      activeDoc.status === 'placeno'
-                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                        : activeDoc.status === 'kasnjenje'
-                        ? 'bg-red-50 text-red-800 border-red-300'
-                        : activeDoc.status === 'naplata'
-                        ? 'bg-amber-50 text-amber-800 border-amber-300'
-                        : 'bg-slate-50 text-slate-700 border-slate-300'
-                    }`}
-                  >
-                    <option value="novo">Novo</option>
-                    <option value="kasnjenje">Kašnjenje</option>
-                    <option value="naplata">Naplata</option>
-                    <option value="placeno">Plaćeno</option>
-                    <option value="cekanje">Čekanje</option>
-                  </select>
-                </div>
-
-                <div className="text-right pl-3 border-l border-slate-200">
-                  <span className="text-[10px] text-slate-400 block font-medium">Ukupan iznos</span>
-                  <span className="text-sm font-black text-slate-900 font-mono">
-                    {formatEuro(activeDoc.amount)}
-                  </span>
-                </div>
-              </div>
-            </div>
+            {/* Active Document Editable Header Card */}
+            <DocumentHeaderCard
+              document={activeDoc}
+              existingFolders={Array.from(new Set(documents.map((d) => d.folder).filter(Boolean)))}
+              onUpdate={handleUpdateActiveDoc}
+            />
 
             {/* Interactive Payment Slip Component */}
             <PaymentSlip
@@ -394,7 +379,31 @@ export default function App() {
         </div>
       )}
 
+      {/* Floating Undo Notification for Deletion */}
+      {recentlyDeleted && (
+        <div className="fixed bottom-6 left-6 z-50 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-200">
+          <span className="text-slate-300">
+            Obrisan nalog: <strong className="text-white">{recentlyDeleted.doc.ourDescription || 'Platni nalog'}</strong>
+          </span>
+          <button
+            type="button"
+            onClick={handleUndoDelete}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
+          >
+            <Undo2 className="w-3.5 h-3.5" />
+            Poništi (Undo)
+          </button>
+        </div>
+      )}
+
       {/* Modals */}
+      <DeleteConfirmModal
+        isOpen={!!deletingDoc}
+        document={deletingDoc}
+        onClose={() => setDeletingDoc(null)}
+        onConfirmDelete={handleConfirmDelete}
+      />
+
       <ScannerModal
         isOpen={scannerOpen}
         onClose={() => setScannerOpen(false)}
