@@ -39,6 +39,9 @@ except ImportError:
     cv2 = zxingcpp = None
 
 
+desc_extension_mode = 0
+
+
 def clean_amount(val_str: str) -> float:
     """
     Cleans and converts input amount string (e.g., 'EUR 45,90', '1.234,56 €') to float.
@@ -124,19 +127,60 @@ def read_multiline_input(prompt: str) -> str:
 
 # --- Payload Builders ---
 
-def build_hub3_pdf417_payload(payer_cell, recip_cell, recip_iban, pnb_cell, amount, desc_cell) -> str:
+def build_hub3_pdf417_payload(payer_cell, recip_cell, recip_iban, pnb_cell, amount, desc_cell, purpose_code) -> str:
     cents = int(round(amount * 100)) if amount > 0 else 0
     p_name, p_street, p_city = parse_address_lines(payer_cell)
     r_name, r_street, r_city = parse_address_lines(recip_cell)
     model, pnb = parse_model_and_pnb(pnb_cell)
 
-    return "\n".join([
-        "HRVHUB30", "EUR", f"{cents:015d}",
-        p_name[:30], p_street[:27], p_city[:27],
-        r_name[:30], r_street[:27], r_city[:27],
-        str(recip_iban).replace(" ", "").upper()[:21],
-        model[:4], pnb[:22], "", flatten_multiline(desc_cell, " ")[:35]
+    out = "\n".join([
+        "HRVHUB30",
+        "EUR", f"{cents:015d}",                        # amount
+        p_name[:30], p_street[:27], p_city[:27],       # payer
+        r_name[:30], r_street[:27], r_city[:27],       # recipient
+        str(recip_iban).replace(" ", "").upper()[:21], # iban
+        model[:4], pnb[:22],                           # structured ref
+        purpose_code,                                  # payment purpose (WTER, ...)
+        flatten_multiline(desc_cell, " ")[:35]         # unstructured ref
     ])
+    print("WRITING HUB3: " + out)
+    return out
+
+
+def desc_extender(mode: str, structured_ref: str, text_cell: str, payer_cell: str) -> str:
+    """'Revolut' mode applier. Returns structured ref to use instead.
+
+    Args:
+      mode: one of the following modes determining what to apply
+        0. Nothing
+        1. Add first line of description to reference
+        2. Add first line of sender + first line of description to reference
+        3. Add first line of sender to reference
+        4. Add description to reference
+        5. Add first line of sender + description to reference
+        anything else: Nothing
+      structured_ref: ref that would be included as-is (model+reference)
+      text_cell: multiline text with description of payment
+      payer_cell: multilne text with payer / transaction sender
+
+    Returns:
+      text that should be used instead of the structured_ref
+    """
+
+    if mode == "0":
+      return structured_ref
+    elif mode == "1":
+      return structured_ref + " " + text_cell.split("\n")[0]
+    elif mode == "2":
+      return structured_ref + " " + payer_cell.split("\n")[0] + text_cell.split("\n")[0]
+    elif mode == "3":
+      return structured_ref + " " + payer_cell.split("\n")[0]
+    elif mode == "4":
+      return structured_ref + " " + flatten_multiline(text_cell, ", ")
+    elif mode == "5":
+      return structured_ref + " " + payer_cell.split("\n")[0] + flatten_multiline(text_cell, ", ")
+    else:
+      return structured_ref
 
 
 def build_epc_sepa_qr_payload(name_cell, iban, amount, text_cell, payer_cell, pnb_cell) -> str:
@@ -145,14 +189,21 @@ def build_epc_sepa_qr_payload(name_cell, iban, amount, text_cell, payer_cell, pn
     sanitized_text = flatten_multiline(text_cell, ", ")
     unstructured_ref = (f"{structured_ref}, {sanitized_text}" if structured_ref and sanitized_text else (structured_ref or sanitized_text))[:140]
 
-    return "\n".join([
-        "BCD", "002", "1", "SCT", "",
-        flatten_multiline(name_cell, " ")[:70],
-        re.sub(r"\s+", "", str(iban)).upper()[:34],
-        f"EUR{amount:.2f}" if amount > 0 else "", "",
-        structured_ref, unstructured_ref,
-        flatten_multiline(payer_cell, " ")[:70]
+    structured_ref = desc_extender(desc_extension_mode, structured_ref, text_cell, payer_cell)[:35]
+
+    out = "\n".join([
+        "BCD", "002", "1", "SCT",
+
+        "",                                           # bic
+        flatten_multiline(name_cell, " ")[:70],       # recipient
+        re.sub(r"\s+", "", str(iban)).upper()[:34],   # iban
+        f"EUR{amount:.2f}" if amount > 0 else "",     # amount
+        "",                                           # purpose code
+        structured_ref, unstructured_ref,             # unstructured and structured reference text
+        flatten_multiline(payer_cell, " ")[:70]       # 'information' (payer name; could be email, ...)
     ])
+    print("WRITING SEPA: " + out)
+    return out
 
 
 # --- File Generators ---
@@ -190,7 +241,8 @@ def parse_csv_line(row, headers=None):
             "iban": clean_row.get("iban", ""),
             "recip": clean_row.get("primatelj", ""),
             "payer": clean_row.get("platitelj", ""),
-            "desc": clean_row.get("opis placanja", "")
+            "desc": clean_row.get("opis placanja", ""),
+            "purpose_code": clean_row.get("sifra namjene", ""),
         }
     else:
         # Fallback to column indices if user copied cells without the header row
@@ -204,7 +256,8 @@ def parse_csv_line(row, headers=None):
                 "iban": row[11],
                 "recip": row[12],
                 "payer": row[13],
-                "desc": row[14]
+                "desc": row[14],
+                "purpose_code": row[15],
             }
     return {}
 
@@ -364,7 +417,8 @@ def process_scanned_sepa(payload: str):
         recip_iban=lines[6].strip(),
         pnb_cell=lines[9].strip(),
         amount=amount,
-        desc_cell=lines[10].strip()
+        desc_cell=lines[10].strip(),
+        purpose_code=""
     )
     generate_images(hub3, payload, "from_sepa")
 
@@ -375,6 +429,18 @@ def main():
     print("==================================================")
     print("  HUB-3 & SEPA Code Toolkit (Generation & Scanning)")
     print("==================================================")
+    print("Revolut / international mode?")
+    print("0. No")
+    print("1. Add first line of description to reference")
+    print("2. Add first line of sender + first line of description to reference")
+    print("3. Add first line of sender to reference")
+    print("4. Add description to reference")
+    print("5. Add first line of sender + description to reference")
+    print("Note: patches QR code's structured mode only")
+
+    global desc_extension_mode
+    desc_extension_mode = input("\nSelect an option (0-5): ").strip()
+
     print("1. Manual Entry / Spreadsheet Cell Paste")
     print("2. Batch CSV Paste (Uses spreadsheet headers)")
     print("3. Scan HUB-3 PDF417 from Webcam -> Generate SEPA")
@@ -390,8 +456,9 @@ def main():
         pnb = read_multiline_input("Model i Poziv na broj:")
         desc = read_multiline_input("Opis plaćanja / Description:")
         payer = read_multiline_input("Platitelj / Payer:")
+        purpose_code = read_multiline_input("Šifra namjene (WTER, ...):")
 
-        hub3 = build_hub3_pdf417_payload(payer, recip, iban, pnb, amount, desc)
+        hub3 = build_hub3_pdf417_payload(payer, recip, iban, pnb, amount, desc, purpose_code)
         sepa = build_epc_sepa_qr_payload(recip, iban, amount, desc, payer, pnb)
         generate_images(hub3, sepa, "manual")
 
@@ -423,7 +490,7 @@ def main():
 
             amt = clean_amount(parsed["amount"])
 
-            hub3 = build_hub3_pdf417_payload(parsed["payer"], parsed["recip"], parsed["iban"], parsed["pnb"], amt, parsed["desc"])
+            hub3 = build_hub3_pdf417_payload(parsed["payer"], parsed["recip"], parsed["iban"], parsed["pnb"], amt, parsed["desc"], parsed["purpose_code"])
             sepa = build_epc_sepa_qr_payload(parsed["recip"], parsed["iban"], amt, parsed["desc"], parsed["payer"], parsed["pnb"])
 
             # File / Folder Routing
