@@ -12,7 +12,7 @@ Compatible with Revolut, Croatian HUB3/SEPA banking apps, and European banks.
 Features:
 - Smart CSV batching (reads folder/filename for output paths)
 - Multi-line cell pasting
-- Webcam scanning
+- Webcam scanning with visual feedback and camera selection
 """
 
 import os
@@ -75,6 +75,7 @@ def flatten_multiline(text: str, join_str: str = " ") -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return join_str.join(lines)
 
+
 def parse_address_lines(cell_text: str) -> tuple:
     if not cell_text: return "", "", ""
     lines = [line.strip() for line in str(cell_text).splitlines() if line.strip()]
@@ -104,6 +105,7 @@ def parse_model_and_pnb(raw_pnb: str, raw_model: str = "") -> tuple:
         model = f"HR{model}"
 
     return model.upper(), pnb
+
 
 def read_multiline_input(prompt: str) -> str:
     print(f"\n{prompt}\n  (Type/paste text; press Enter on a blank line when done)")
@@ -136,6 +138,7 @@ def build_hub3_pdf417_payload(payer_cell, recip_cell, recip_iban, pnb_cell, amou
         model[:4], pnb[:22], "", flatten_multiline(desc_cell, " ")[:35]
     ])
 
+
 def build_epc_sepa_qr_payload(name_cell, iban, amount, text_cell, payer_cell, pnb_cell) -> str:
     model, pnb = parse_model_and_pnb(pnb_cell)
     structured_ref = (f"{model} {pnb}" if model and pnb else (model or pnb))[:35]
@@ -164,14 +167,14 @@ def generate_images(hub3_payload, sepa_payload, prefix="payment"):
         # Generate with Error Correction Level M as per EPC guidelines
         qr = segno.make(sepa_payload, error='m')
         qr.save(filename, scale=6)
-        print(f"\n[Success] SEPA QR code saved to '{filename}' (using Segno).")
+        print(f"[+] SEPA QR saved:    {filename}")
     elif qrcode:
         qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M)
         qr.add_data(sepa_payload)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
         img.save(filename)
-        print(f"[+] SEPA QR saved:    {prefix}_sepa.png")
+        print(f"[+] SEPA QR saved:    {filename}")
 
 
 # --- CSV Parser Helpers ---
@@ -208,41 +211,123 @@ def parse_csv_line(row, headers=None):
 
 # --- Webcam Scanner ---
 
+def get_camera_index():
+    """Probes video capture devices and allows the user to select one."""
+    print("\n[*] Probing available cameras (this may take a few seconds)...")
+    available_cams = []
+
+    # Check first 5 indices to find available cameras
+    for i in range(5):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            ret, _ = cap.read()
+            if ret:
+                available_cams.append(i)
+        cap.release()
+
+    if not available_cams:
+        print("[Error] No cameras detected or permissions denied.")
+        return -1
+
+    if len(available_cams) == 1:
+        print(f"[*] Found 1 camera (Index {available_cams[0]}).")
+        return available_cams[0]
+
+    print("[*] Multiple cameras detected:")
+    for cam in available_cams:
+        print(f"    [{cam}] Camera {cam}")
+
+    while True:
+        choice = input(f"Select camera index ({'/'.join(map(str, available_cams))}): ").strip()
+        if choice.isdigit() and int(choice) in available_cams:
+            return int(choice)
+        print("[!] Invalid selection. Please enter a valid camera number.")
+
 def scan_from_webcam(expected_format="HUB3"):
     if not (cv2 and zxingcpp):
         print("[Error] Webcam scanning requires OpenCV and zxing-cpp.")
         return None
 
-    cap = cv2.VideoCapture(0)
-    print(f"\n[*] Camera active. Show the {expected_format} code to the webcam...")
-    print("[*] Press 'q' to cancel.")
+    cam_idx = get_camera_index()
+    if cam_idx < 0:
+        return None
+
+    cap = cv2.VideoCapture(cam_idx)
+    print(f"\n[*] Camera {cam_idx} active. Window opened.")
+    print(f"[*] Continuously scanning for {expected_format}...")
+    print("[*] Position the code in the frame. Press 'q' in the video window to cancel.")
 
     decoded_payload = None
     while True:
         ret, frame = cap.read()
         if not ret: continue
 
-        cv2.imshow("Scanner", frame)
+        # Read barcodes before applying UI overlays
         results = zxingcpp.read_barcodes(frame)
 
+        # Persistent UI overlays
+        cv2.putText(frame, f"Scanning for {expected_format}... (Auto)", (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(frame, "Press 'q' to cancel", (15, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
         for result in results:
+            # Draw a blue bounding box around ANY detected barcode to show it is actively "seeing" codes
+            try:
+                p1 = (result.position.top_left.x, result.position.top_left.y)
+                p2 = (result.position.top_right.x, result.position.top_right.y)
+                p3 = (result.position.bottom_right.x, result.position.bottom_right.y)
+                p4 = (result.position.bottom_left.x, result.position.bottom_left.y)
+                cv2.line(frame, p1, p2, (255, 0, 0), 3)
+                cv2.line(frame, p2, p3, (255, 0, 0), 3)
+                cv2.line(frame, p3, p4, (255, 0, 0), 3)
+                cv2.line(frame, p4, p1, (255, 0, 0), 3)
+
+                format_name = str(result.format).split('.')[-1]
+                cv2.putText(frame, format_name, (p1[0], max(p1[1] - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+            except Exception:
+                pass
+
+            # Check for Target match
+            is_match = False
             if expected_format == "HUB3" and result.format == zxingcpp.BarcodeFormat.PDF417:
                 if result.text.startswith("HRVHUB30"):
                     decoded_payload = result.text
-                    break
+                    is_match = True
             elif expected_format == "SEPA" and result.format == zxingcpp.BarcodeFormat.QRCode:
                 if result.text.startswith("BCD\n002\n1\nSCT"):
                     decoded_payload = result.text
-                    break
+                    is_match = True
 
-        if decoded_payload or cv2.waitKey(1) & 0xFF == ord('q'):
+            # Flash Green Box on Match
+            if is_match:
+                try:
+                    cv2.line(frame, p1, p2, (0, 255, 0), 5)
+                    cv2.line(frame, p2, p3, (0, 255, 0), 5)
+                    cv2.line(frame, p3, p4, (0, 255, 0), 5)
+                    cv2.line(frame, p4, p1, (0, 255, 0), 5)
+                except Exception:
+                    pass
+
+        cv2.imshow("Scanner", frame)
+
+        if decoded_payload:
+            cv2.waitKey(600)  # Pause briefly so the user sees the green success box
+            break
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
     cv2.destroyAllWindows()
+
+    # macOS GUI flush workaround (ensures the window actually disappears immediately)
+    for _ in range(5):
+        cv2.waitKey(1)
+
     return decoded_payload
 
+
 def process_scanned_hub3(payload: str):
+    print(f"RAW HUB3 PAYLOAD: {payload}")
     lines = payload.split('\n')
     print("\n--- Scanned HUB3 Data ---")
     print(f"Recipient: {lines[6].strip()}")
@@ -260,7 +345,9 @@ def process_scanned_hub3(payload: str):
     )
     generate_images(payload, sepa, "from_hub3")
 
+
 def process_scanned_sepa(payload: str):
+    print(f"RAW SEPA PAYLOAD: {payload}")
     lines = payload.split('\n')
     amt_str = lines[7].strip().replace("EUR", "")
     amount = float(amt_str) if amt_str else 0.0
