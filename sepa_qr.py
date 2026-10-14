@@ -2,6 +2,7 @@
 import segno
 from segno import helpers
 
+
 def generate_sepa_qr(name, iban, amount, text, filename="sepa_payment_qr.png"):
     """
     Generates a valid EPC-compliant SEPA Credit Transfer QR code.
@@ -23,7 +24,7 @@ def generate_sepa_qr(name, iban, amount, text, filename="sepa_payment_qr.png"):
         print(f"Error generating QR code: {e}")
 
 
-def build_raw_sepa_payload(name, iban, amount, text, email):
+def build_raw_sepa_payload(name, iban, amount, text, email, bic="", purpose="", structured_ref=""):
     # Ensure precision format for EUR amount (e.g., EUR45.90)
     formatted_amount = f"EUR{amount:.2f}" if amount else ""
     
@@ -33,18 +34,20 @@ def build_raw_sepa_payload(name, iban, amount, text, email):
         "002",                               # 2: Version
         "1",                                 # 3: Character set (UTF-8)
         "SCT",                               # 4: Identification
-        "",                                  # 5: BIC (Optional)
+        bic,                                 # 5: BIC (Optional)
         name[:70],                           # 6: Name (Max 70 chars)
         iban.replace(" ", ""),               # 7: IBAN (Strip spaces)
         formatted_amount,                    # 8: Amount
-        "",                                  # 9: Purpose code
-        "",                                  # 10: Structured reference
+        purpose,                             # 9: Purpose code
+        structured_ref,                      # 10: Structured reference
         text[:140] if text else "",          # 11: Unstructured text (Max 140 chars)
         f"Email: {email}" if email else ""   # 12: Information line
     ]
     
     # Join using exact line feed (\n) characters
     return "\n".join(lines)
+
+# Need to comply with https://sepa.hr/wp-content/uploads/2022/01/Pregled-osnovnih-modela-poziva-na-broj-eng.-sijecanj-2021.pdf
 
 
 # Example Usage
@@ -62,6 +65,8 @@ if __name__ == "__main__":
     user_iban = input("Enter IBAN: ").strip()
     
     amount_raw = input("Enter Amount in EUR (e.g., 45.90 or leave blank): ").strip()
+    # TODO: remove currency symbol
+    amount_raw = amount_raw.replace(",", ".")
     user_amount = float(amount_raw) if amount_raw else 0.0
     
     user_text = input("Enter Remittance Text / Invoice Info: ").strip()
@@ -71,8 +76,13 @@ if __name__ == "__main__":
     if not output_filename:
         output_filename = "sepa_input_qr.png"
 
+    # examples
+    pnb = input("Model i Poziv na broj (ex HR01 06428010-246842337-1): ")
+    purpose = input("Sifra namjene (npr WTER): ")
+    bic = input("BIC: ")
+
     # Process and build the QR payload
-    payload = build_raw_sepa_payload(user_name, user_iban, user_amount, user_text, user_email)
+    payload = build_raw_sepa_payload(user_name, user_iban, user_amount, user_text, user_email, purpose=purpose, structured_ref=pnb, bic=bic)
     
     try:
         # Enforce Error Correction Level M as required by SEPA guidelines
