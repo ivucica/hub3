@@ -169,17 +169,57 @@ export const InfoModal: React.FC<InfoModalProps> = ({
               Nije pronađen model za uneseni pojam.
             </div>
           ) : (
-            filteredModels.map((item) => {
-              const isSelected = selectedCode === item.code;
-              return (
-                <div
-                  key={item.code}
-                  className={`rounded-xl border p-4 transition space-y-2.5 ${
-                    isSelected
-                      ? 'border-red-400 bg-red-50/80 shadow-xs ring-1 ring-red-400'
-                      : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-2xs'
-                  }`}
-                >
+            <>
+              {/* Option for Blank Model (No model) */}
+              <div
+                className={`rounded-xl border p-4 transition space-y-2.5 ${
+                  !selectedCode
+                    ? 'border-red-400 bg-red-50/80 shadow-xs ring-1 ring-red-400'
+                    : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-2xs'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-bold px-2.5 py-1 rounded bg-slate-700 text-white">
+                      Bez modela
+                    </span>
+                    <span className="font-bold text-slate-800 text-xs">
+                      Slobodan unos poziva na broj (bez provjere)
+                    </span>
+                  </div>
+                  {onSelectCode && (
+                    <button
+                      onClick={() => {
+                        onSelectCode('');
+                        onClose();
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition cursor-pointer ${
+                        !selectedCode
+                          ? 'bg-red-600 text-white'
+                          : 'bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-600'
+                      }`}
+                    >
+                      {!selectedCode ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
+                      {!selectedCode ? 'Odabrano' : 'Ukloni model'}
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-600">
+                  Omogućuje potpuno slobodan unos poziva na broj bez ikakve provjere kontrolnog broja i bez forsiranja crtica.
+                </p>
+              </div>
+
+              {filteredModels.map((item) => {
+                const isSelected = selectedCode === item.code;
+                return (
+                  <div
+                    key={item.code}
+                    className={`rounded-xl border p-4 transition space-y-2.5 ${
+                      isSelected
+                        ? 'border-red-400 bg-red-50/80 shadow-xs ring-1 ring-red-400'
+                        : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-2xs'
+                    }`}
+                  >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs font-bold px-2.5 py-1 rounded bg-red-600 text-white">
@@ -224,7 +264,8 @@ export const InfoModal: React.FC<InfoModalProps> = ({
                   </p>
                 </div>
               );
-            })
+            })}
+          </>
           )}
         </div>
 

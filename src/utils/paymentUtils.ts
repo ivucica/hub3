@@ -1,4 +1,6 @@
 import { PaymentDocument, RevolutExtMode } from '../types/payment';
+export { validatePnb, calculateMod11Ini, calculateIso7064Mod11_10 } from './pnbValidator';
+export type { PnbValidationResult, PnbValidationSeverity } from './pnbValidator';
 
 export function cleanAmount(valStr: string | number | undefined | null): number {
   if (valStr === undefined || valStr === null) return 0;
@@ -61,11 +63,12 @@ export function parseAddressLines(cellText: string): [string, string, string] {
   return [lines[0] || '', lines[1] || '', lines[2] || ''];
 }
 
-export function parseModelAndPnb(rawPnb: string, rawModel = ''): { model: string; pnb: string } {
+export function parseModelAndPnb(rawPnb: string, rawModel?: string): { model: string; pnb: string } {
   let pnb = (rawPnb || '').trim();
-  let model = (rawModel || '').trim().toUpperCase();
+  let model = rawModel !== undefined ? rawModel.trim().toUpperCase() : '';
 
-  if (pnb && !model) {
+  // Only infer model from pnb prefix if model was not explicitly passed
+  if (rawModel === undefined && pnb && !model) {
     const match = pnb.match(/^(HR\d{2})\s*(.*)$/i);
     if (match) {
       model = match[1].toUpperCase();
@@ -83,7 +86,7 @@ export function parseModelAndPnb(rawPnb: string, rawModel = ''): { model: string
     model = `HR${model}`;
   }
 
-  return { model: model || 'HR01', pnb };
+  return { model: model || '', pnb };
 }
 
 export function descExtender(

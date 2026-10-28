@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   HelpCircle,
   QrCode,
@@ -11,6 +11,8 @@ import {
   Layers,
   ArrowRightLeft,
   Sparkles,
+  AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import { PaymentDocument } from '../types/payment';
 import { PAYMENT_MODELS } from '../data/models';
@@ -22,6 +24,7 @@ import {
   formatSlipAmount,
 } from '../utils/paymentUtils';
 import { renderHub3Barcode, downloadCanvasAsPng } from '../utils/barcodeGenerator';
+import { validatePnb } from '../utils/pnbValidator';
 
 interface PaymentSlipProps {
   document: PaymentDocument;
@@ -71,9 +74,11 @@ export const PaymentSlip: React.FC<PaymentSlipProps> = ({
   };
 
   // Find current model info and purpose code info for 1-liner descriptions
-  const currentModelInfo = PAYMENT_MODELS.find(
-    (m) => m.code.toUpperCase() === (document.model || 'HR01').toUpperCase()
-  );
+  const currentModelInfo = document.model
+    ? PAYMENT_MODELS.find((m) => m.code.toUpperCase() === document.model.toUpperCase())
+    : undefined;
+
+  const pnbValidation = validatePnb(document.model, document.pnb);
 
   const currentPurposeInfo = PURPOSE_CODES.find(
     (p) => p.code.toUpperCase() === (document.purposeCode || '').toUpperCase()
@@ -300,10 +305,11 @@ export const PaymentSlip: React.FC<PaymentSlipProps> = ({
                       {/* Model Selector with 1-liner description */}
                       <div className="col-span-4 relative">
                         <select
-                          value={document.model || 'HR01'}
+                          value={document.model || ''}
                           onChange={(e) => handleFieldChange('model', e.target.value)}
                           className="w-full text-xs font-mono font-bold bg-white border border-red-400 rounded px-1.5 py-1 focus:ring-1 focus:ring-red-500 focus:outline-none"
                         >
+                          <option value="">(Bez modela)</option>
                           {PAYMENT_MODELS.map((m) => (
                             <option key={m.code} value={m.code}>
                               {m.code} - {m.name.slice(0, 16)}...
@@ -319,15 +325,19 @@ export const PaymentSlip: React.FC<PaymentSlipProps> = ({
                           value={document.pnb}
                           onChange={(e) => handleFieldChange('pnb', e.target.value)}
                           placeholder="12345-67890-01"
-                          className="w-full text-xs font-mono font-semibold px-2 py-1 bg-white border border-red-400 rounded focus:ring-1 focus:ring-red-500 focus:outline-none"
+                          className={`w-full text-xs font-mono font-semibold px-2 py-1 bg-white rounded focus:ring-1 focus:outline-none ${
+                            pnbValidation.severity === 'control_warning'
+                              ? 'border-2 border-amber-500 bg-amber-50/30 focus:ring-amber-500'
+                              : 'border border-red-400 focus:ring-red-500'
+                          }`}
                         />
                       </div>
                     </div>
 
                     {/* 1-liner description for Model */}
-                    {currentModelInfo && (
+                    {currentModelInfo ? (
                       <div className="text-[10px] text-slate-600 truncate mt-0.5 flex items-center justify-between">
-                        <span>
+                        <span className="truncate">
                           <strong className="text-red-700">{currentModelInfo.code}:</strong> {currentModelInfo.description}
                         </span>
                         <button
@@ -337,6 +347,55 @@ export const PaymentSlip: React.FC<PaymentSlipProps> = ({
                         >
                           više
                         </button>
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        <span className="text-slate-700 font-medium">Bez modela:</span> slobodan unos, bez kontrole i bez nametanja crtica.
+                      </div>
+                    )}
+
+                    {/* PNB Validation Status & Warnings */}
+                    {document.pnb && (
+                      <div className="mt-1.5 space-y-1">
+                        {pnbValidation.severity === 'control_warning' && (
+                          <div className="p-2 rounded-lg bg-amber-50 border border-amber-300 text-amber-950 text-[11px] space-y-1 shadow-2xs">
+                            <div className="flex items-start gap-1.5 font-bold text-amber-900">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600 mt-0.5" />
+                              <span>{pnbValidation.title}</span>
+                            </div>
+                            <p className="text-[10px] text-amber-900 leading-snug">
+                              {pnbValidation.message}
+                            </p>
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-amber-200/80 text-[10px]">
+                              <span className="text-amber-800 italic">
+                                * Ne blokira izvoz ni provođenje naloga.
+                              </span>
+                              {pnbValidation.suggestedPnb && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleFieldChange('pnb', pnbValidation.suggestedPnb!)}
+                                  className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold cursor-pointer transition shadow-2xs"
+                                >
+                                  Ispravi u: {pnbValidation.suggestedPnb}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {pnbValidation.severity === 'dash_info' && (
+                          <div className="flex items-start gap-1.5 px-2 py-1 rounded bg-blue-50 border border-blue-200 text-blue-900 text-[10px] leading-tight">
+                            <Info className="w-3.5 h-3.5 shrink-0 text-blue-600 mt-0.5" />
+                            <span>{pnbValidation.message}</span>
+                          </div>
+                        )}
+
+                        {pnbValidation.severity === 'ok' && (
+                          <div className="flex items-center gap-1 text-[10px] text-emerald-700 font-medium">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span>{pnbValidation.message}</span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -526,7 +585,7 @@ export const PaymentSlip: React.FC<PaymentSlipProps> = ({
                   Model i poziv na broj primatelja:
                 </span>
                 <div className="font-mono font-bold text-slate-800 text-xs p-1.5 bg-white border border-red-200 rounded truncate">
-                  {document.model} {document.pnb || '—'}
+                  {document.model ? `${document.model} ` : ''}{document.pnb || '—'}
                 </div>
               </div>
 

@@ -39,9 +39,19 @@ export const DocumentList: React.FC<DocumentListProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [folderFilter, setFolderFilter] = useState('Sve');
-  const [statusFilter, setStatusFilter] = useState('Sve');
+  const [statusFilter, setStatusFilter] = useState<
+    'sve' | 'neplaceno' | 'placeno' | 'kasnjenje' | 'naplata' | 'cekanje'
+  >('sve');
 
   const folders = ['Sve', ...Array.from(new Set(documents.map((d) => d.folder).filter(Boolean)))];
+
+  // Dynamic counts for status filters
+  const countAll = documents.length;
+  const countUnpaid = documents.filter((d) => d.status !== 'placeno').length;
+  const countPaid = documents.filter((d) => d.status === 'placeno').length;
+  const countOverdue = documents.filter((d) => d.status === 'kasnjenje').length;
+  const countDueSoon = documents.filter((d) => d.status === 'naplata').length;
+  const countWaiting = documents.filter((d) => d.status === 'cekanje' || d.status === 'novo').length;
 
   const filteredDocs = documents.filter((doc) => {
     const matchesSearch =
@@ -52,7 +62,19 @@ export const DocumentList: React.FC<DocumentListProps> = ({
       doc.pnb.toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesFolder = folderFilter === 'Sve' || doc.folder === folderFilter;
-    const matchesStatus = statusFilter === 'Sve' || doc.status === statusFilter;
+
+    let matchesStatus = true;
+    if (statusFilter === 'neplaceno') {
+      matchesStatus = doc.status !== 'placeno';
+    } else if (statusFilter === 'placeno') {
+      matchesStatus = doc.status === 'placeno';
+    } else if (statusFilter === 'kasnjenje') {
+      matchesStatus = doc.status === 'kasnjenje';
+    } else if (statusFilter === 'naplata') {
+      matchesStatus = doc.status === 'naplata';
+    } else if (statusFilter === 'cekanje') {
+      matchesStatus = doc.status === 'cekanje' || doc.status === 'novo';
+    }
 
     return matchesSearch && matchesFolder && matchesStatus;
   });
@@ -123,31 +145,159 @@ export const DocumentList: React.FC<DocumentListProps> = ({
           />
         </div>
 
-        {/* Folder filter tabs */}
+        {/* Status filter pills */}
         <div className="flex items-center gap-1 overflow-x-auto pb-0.5 text-xs scrollbar-none">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('sve')}
+            className={`px-2 py-0.5 rounded-lg shrink-0 text-[10px] font-bold transition cursor-pointer ${
+              statusFilter === 'sve'
+                ? 'bg-slate-900 text-white shadow-2xs'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            Svi računi ({countAll})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('neplaceno')}
+            className={`px-2 py-0.5 rounded-lg shrink-0 text-[10px] font-bold transition cursor-pointer flex items-center gap-1 ${
+              statusFilter === 'neplaceno'
+                ? 'bg-amber-600 text-white shadow-2xs'
+                : 'bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100'
+            }`}
+            title="Svi neplaćeni računi (kašnjenje + naplata + čekanje)"
+          >
+            <Clock className="w-2.5 h-2.5" />
+            Neplaćeno ({countUnpaid})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('placeno')}
+            className={`px-2 py-0.5 rounded-lg shrink-0 text-[10px] font-bold transition cursor-pointer flex items-center gap-1 ${
+              statusFilter === 'placeno'
+                ? 'bg-emerald-600 text-white shadow-2xs'
+                : 'bg-emerald-50 border border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+            }`}
+            title="Svi plaćeni računi"
+          >
+            <CheckCircle2 className="w-2.5 h-2.5" />
+            Plaćeno ({countPaid})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('kasnjenje')}
+            className={`px-2 py-0.5 rounded-lg shrink-0 text-[10px] font-bold transition cursor-pointer flex items-center gap-1 ${
+              statusFilter === 'kasnjenje'
+                ? 'bg-red-600 text-white shadow-2xs'
+                : 'bg-red-50 border border-red-200 text-red-700 hover:bg-red-100'
+            }`}
+            title="Računi kojima je prošao rok dospijeća"
+          >
+            <AlertCircle className="w-2.5 h-2.5" />
+            Kašnjenje ({countOverdue})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('naplata')}
+            className={`px-2 py-0.5 rounded-lg shrink-0 text-[10px] font-bold transition cursor-pointer flex items-center gap-1 ${
+              statusFilter === 'naplata'
+                ? 'bg-amber-600 text-white shadow-2xs'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+            }`}
+            title="Dospijeva uskoro (manje od 14 dana)"
+          >
+            <Clock className="w-2.5 h-2.5" />
+            Naplata ({countDueSoon})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('cekanje')}
+            className={`px-2 py-0.5 rounded-lg shrink-0 text-[10px] font-bold transition cursor-pointer ${
+              statusFilter === 'cekanje'
+                ? 'bg-blue-600 text-white shadow-2xs'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+            }`}
+            title="Više od 14 dana do roka"
+          >
+            Čekanje ({countWaiting})
+          </button>
+        </div>
+
+        {/* Folder filter tabs */}
+        <div className="flex items-center gap-1 overflow-x-auto pb-0.5 text-xs scrollbar-none border-t border-slate-200/60 pt-1.5">
+          <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0 mr-1">Mapa:</span>
           {folders.map((f) => (
             <button
               key={f}
               onClick={() => setFolderFilter(f)}
-              className={`px-2.5 py-1 rounded-lg shrink-0 text-[11px] font-semibold transition cursor-pointer ${
+              className={`px-2 py-0.5 rounded-md shrink-0 text-[10px] font-semibold transition cursor-pointer ${
                 folderFilter === f
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  ? 'bg-red-600 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
               {f}
             </button>
           ))}
+
+          {(statusFilter !== 'sve' || folderFilter !== 'Sve' || searchTerm) && (
+            <button
+              onClick={() => {
+                setStatusFilter('sve');
+                setFolderFilter('Sve');
+                setSearchTerm('');
+              }}
+              className="text-[9px] text-red-600 hover:underline font-bold shrink-0 ml-auto cursor-pointer"
+            >
+              Poništi filtre
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Summary strip */}
-      <div className="px-4 py-2 bg-slate-100/70 border-b border-slate-200 flex items-center justify-between text-xs">
+      {/* Summary strip with dynamic status label */}
+      <div className="px-4 py-2 bg-slate-100/80 border-b border-slate-200 flex items-center justify-between text-xs">
         <span className="text-slate-500 font-medium">
           Prikazano: <strong className="text-slate-800">{filteredDocs.length}</strong>
+          {filteredDocs.length !== documents.length && (
+            <span className="text-slate-400 text-[10px]"> od {documents.length}</span>
+          )}
         </span>
         <span className="text-slate-500 font-medium">
-          Ukupno: <strong className="text-red-700 font-bold">{formatEuro(totalAmount)}</strong>
+          {statusFilter === 'neplaceno'
+            ? 'Ukupno neplaćeno: '
+            : statusFilter === 'placeno'
+            ? 'Ukupno plaćeno: '
+            : statusFilter === 'kasnjenje'
+            ? 'Ukupno u kašnjenju: '
+            : statusFilter === 'naplata'
+            ? 'Ukupno za naplatu (<14 d): '
+            : statusFilter === 'cekanje'
+            ? 'Ukupno na čekanju: '
+            : 'Ukupan iznos: '}
+          <strong
+            className={`font-bold font-mono text-sm ${
+              statusFilter === 'neplaceno'
+                ? 'text-amber-700'
+                : statusFilter === 'kasnjenje'
+                ? 'text-red-700'
+                : statusFilter === 'placeno'
+                ? 'text-emerald-700'
+                : statusFilter === 'naplata'
+                ? 'text-amber-700'
+                : statusFilter === 'cekanje'
+                ? 'text-blue-700'
+                : 'text-slate-900'
+            }`}
+          >
+            {formatEuro(totalAmount)}
+          </strong>
         </span>
       </div>
 
